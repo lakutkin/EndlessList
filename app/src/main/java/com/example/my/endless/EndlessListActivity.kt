@@ -13,24 +13,21 @@ import android.widget.TextView
 
 import com.example.my.myapplication.R
 import java.util.*
+import kotlin.jvm.internal.iterator
 
 class EndlessListActivity : Activity() {
     private var adapter: EndlessAdapter? = null
-
-    private val testArray = arrayOf("one", "two", "three", "four", "five", "six", "seven", "eight",
-            "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
-            "eightteen", "nineteen", "twenty", "twenty1", "twenty2", "twenty3", "twenty4", "twenty5",
-            "twenty6", "twenty7", "twenty8", "twenty9", "thirty", "thirty1", "thirty2", "thirty3",
-            "thirty4", "thirty5", "thirty6", "thirty7", "thirty8", "thirty9", "forty")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_endless_list)
 
+        var testArray = Array(1000, { "number $it" })
+
         val callback = object: WindowEndlessDataSource.Callback {
             override fun needData(start: Int, length: Int): List<Any> {
-                Thread.sleep(1000)
-                if (start >= testArray.size){
+                Thread.sleep(500)
+                if (start >= testArray.size || start < 0){
                     return Collections.emptyList()
                 }
                 return testArray.slice(start..Math.min(testArray.size - 1, start + length - 1))
@@ -48,6 +45,10 @@ class EndlessListActivity : Activity() {
 
         val listView = findViewById(R.id.list) as ListView
         listView.adapter = adapter
+
+        findViewById(R.id.button).setOnClickListener {
+            (adapter as EndlessAdapter).dropCache()
+        }
     }
 
     companion object {

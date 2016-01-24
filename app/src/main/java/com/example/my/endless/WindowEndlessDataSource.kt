@@ -4,7 +4,10 @@ import android.app.Activity
 import android.app.LoaderManager
 import android.content.Loader
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.telecom.Call
+import android.util.Log
 import android.widget.BaseAdapter
 import android.widget.ListAdapter
 import java.util.*
@@ -12,21 +15,17 @@ import java.util.*
 class WindowEndlessDataSource(private val activity: Activity,
                               private val loaderId: Int,
                               private val callback: WindowEndlessDataSource.Callback) : EndlessDataSource, LoaderManager.LoaderCallbacks<WindowEndlessDataSource.Window> {
-    override var count = 1
+    override var totalCount = 1
 
     companion object {
-        public val WINDOW_SIZE = 20
+        public val WINDOW_SIZE = 40
+        public val SMALL_WINDOW_SIZE = 20
     }
 
-    val loader: EndlessLoader?
-        get() {
-            return activity.loaderManager.getLoader<List<EndlessItem>>(loaderId) as EndlessLoader?
-        }
-
     private var window: Window
-    init{
+    private var handler = Handler(Looper.getMainLooper())
+    init {
         window = Window()
-        activity.loaderManager.initLoader(loaderId, null, this)
     }
 
     private var listener: (() -> Unit)? = null
@@ -39,51 +38,116 @@ class WindowEndlessDataSource(private val activity: Activity,
         fun needData(start: Int, length: Int): List<Any>
     }
 
-    public class Window(internal var start: Int = 0, internal var capacity: Int = WINDOW_SIZE, var data: List<EndlessItem> = ArrayList()) {
-        val end:Int
+    public class Window(internal var start: Int = 0, internal var capacity: Int = WINDOW_SIZE, var data: List<EndlessItem> = ArrayList(capacity)) {
+        val end: Int
             get() = start + capacity - 1
+
+        private val endOfData: Int
+            get() = start + size - 1
+
 
         public val size: Int
             get() = data.size
 
-        public fun getDataByIndex(externalIndex: Int): EndlessItem{
+        public fun getDataByIndex(externalIndex: Int): EndlessItem {
             //external index can be any value, maybe large
             //internal index is used to access data in the data array
-            val internalIndex = externalIndex  - start
-            if (internalIndex >= size || internalIndex <0){
+            val internalIndex = externalIndex - start
+            if (internalIndex >= size || internalIndex < 0) {
                 return EndlessItem(EndlessItem.Type.STUB)
             }
             return data[internalIndex]
         }
 
-        fun advanceToNewPosition(newPosition: Int): Window{
-            if (start<=newPosition && newPosition < end){
+        fun advanceToNewPosition(newPosition: Int): Window {
+            if (start <= newPosition && newPosition <= end) {
                 return Window(start, capacity, data)
             }
-            val realOffset: Int
-            if (newPosition < start){
-                val offset = this.start - newPosition
-                realOffset = - capacity * (1 + (offset / capacity))
-            } else { //newPosition >=end
-                val offset = newPosition - this.end
-                realOffset = capacity * (1 + offset / capacity)
+            val retVal: Window
+            if (newPosition < start) {
+                retVal = Window(Math.max(0, start - SMALL_WINDOW_SIZE), SMALL_WINDOW_SIZE)
+            } else {
+                //newPosition >end
+                retVal = Window(end + 1, SMALL_WINDOW_SIZE)
             }
-            return Window(start + realOffset / 2, WINDOW_SIZE)
+            Log.d("EndlessLoader", "New position: $newPosition: window moved to $retVal")
+            return retVal
         }
 
         internal fun hasPosition(position: Int): Boolean {
             return this.start <= position && position < this.start + this.capacity
         }
+
+        fun merge(otherWindow: Window) {
+            Log.d("EndlessLoader", "Merging $this and $otherWindow")
+
+            var newStart: Int
+            var newEnd: Int
+
+            if (start <= otherWindow.start) {
+                //new window is to the right
+                newEnd = Math.max(end, otherWindow.endOfData)
+                newStart = (newEnd + 1) - capacity
+            } else {
+                //new window is to the left
+                newStart = Math.min(start, otherWindow.start)
+            }
+            var newData = Array(capacity, fun (i: Int): EndlessItem{
+                val index = i + newStart
+                if (otherWindow.hasPosition(index)){
+                    return otherWindow.getDataByIndex(index)
+                } else if (hasPosition(index)){
+                    return getDataByIndex(index)
+                } else {
+                    return  EndlessItem(EndlessItem.Type.STUB)
+                }
+            })
+            data = newData.asList()
+            start = newStart
+            Log.d("EndlessLoader", "Merged: $this")
+        }
+
+        fun reset() {
+            data = ArrayList()
+        }
+
+        fun asBundle(): Bundle {
+            val b = Bundle()
+            b.putInt("start", start)
+            b.putInt("capacity", capacity)
+            return b
+        }
+
+        override fun toString(): String {
+            return "[start: $start, end: $end, capacity: $capacity, size: $size]"
+        }
     }
 
+    public inner class RestartLoaderRunnable(var newWindow: Window): Runnable{
+        override fun run() {
+            Log.d("EndlessLoader", "Restarting loader for window $newWindow, $this")
+            activity.loaderManager.restartLoader(loaderId, newWindow.asBundle(), this@WindowEndlessDataSource)
+        }
+    }
+
+    val restartLoaderRunnable = RestartLoaderRunnable(window)
+
     override fun getItem(position: Int): EndlessItem {
-        if (!this.window.hasPosition(position)) {
+        val dataByIndex = window.getDataByIndex(position)
+        if (!this.window.hasPosition(position) || dataByIndex.type == EndlessItem.Type.STUB) {
             val newWindow = window.advanceToNewPosition(position)
-            loader!!.loadWindow(newWindow)
+
+            //TODO there is a bug here: for some reason restartLoaderRunnable is renewed every so often, which causes
+            //it to refresh multiple times on fast scrolling. I need to further investigate this
+            restartLoaderRunnable.newWindow = newWindow
+            Log.d("EndlessLoader", "removing callback $restartLoaderRunnable")
+            handler.removeCallbacks(restartLoaderRunnable)
+            Log.d("EndlessLoader", "postDelayed $restartLoaderRunnable")
+            handler.postDelayed(restartLoaderRunnable, 500)
             return EndlessItem(EndlessItem.Type.STUB, null)
         }
 
-        return window.getDataByIndex(position)
+        return dataByIndex
     }
 
     override fun getItemId(position: Int): Long {
@@ -91,7 +155,7 @@ class WindowEndlessDataSource(private val activity: Activity,
     }
 
     override fun onCreateLoader(id: Int, args: Bundle?): Loader<Window> {
-        return object : EndlessLoader(activity, window) {
+        return object : EndlessLoader(activity, args!!.getInt("start"), args.getInt("capacity")) {
             override fun advanceInBackground(start: Int, length: Int): List<EndlessItem> {
                 val data = callback.needData(start, length)
                 val windowedData = data.map { EndlessItem(EndlessItem.Type.REAL, it) }
@@ -104,14 +168,20 @@ class WindowEndlessDataSource(private val activity: Activity,
     }
 
     override fun onLoadFinished(loader: Loader<Window>, data: Window) {
-        window = data
-        if (data.size < data.capacity){
-            count = window.start + window.size
+        window.merge(data)
+        if (data.size < data.capacity) {
+            totalCount = window.start + window.size
         } else {
-            if (count < window.start + window.size + 1){
-                count = window.start + window.size + 1
+            if (totalCount < window.start + window.size + 1) {
+                totalCount = window.start + window.size + 1
             }
         }
+        Log.d("EndlessList", "OnLoadFinished: totalCount = $totalCount")
+        notifyListeners()
+    }
+
+    override fun dropCache() {
+        window.data = ArrayList(WINDOW_SIZE)
         notifyListeners()
     }
 

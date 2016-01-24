@@ -9,7 +9,7 @@ abstract class EndlessAdapter(private val endlessDataSource: EndlessDataSource) 
         }
     }
     override fun getCount(): Int {
-        return endlessDataSource.count
+        return endlessDataSource.totalCount
     }
 
     override fun getItem(position: Int): EndlessItem {
@@ -18,5 +18,9 @@ abstract class EndlessAdapter(private val endlessDataSource: EndlessDataSource) 
 
     override fun getItemId(position: Int): Long {
         return endlessDataSource.getItemId(position)
+    }
+
+    fun dropCache() {
+        endlessDataSource.dropCache()
     }
 }
