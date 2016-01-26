@@ -16,17 +16,20 @@ class WindowEndlessDataSource(private val activity: Activity,
                               private val loaderId: Int,
                               private val callback: WindowEndlessDataSource.Callback) : EndlessDataSource, LoaderManager.LoaderCallbacks<WindowEndlessDataSource.Window> {
     override var totalCount = 1
+    private var window: Window
+
+    init{
+        window = Window()
+        activity.loaderManager.initLoader(loaderId, window.asBundle(), this@WindowEndlessDataSource)
+    }
 
     companion object {
         public val WINDOW_SIZE = 40
         public val SMALL_WINDOW_SIZE = 20
     }
 
-    private var window: Window
+
     private var handler = Handler(Looper.getMainLooper())
-    init {
-        window = Window()
-    }
 
     private var listener: (() -> Unit)? = null
 
@@ -39,7 +42,7 @@ class WindowEndlessDataSource(private val activity: Activity,
     }
 
     public class Window(internal var start: Int = 0, internal var capacity: Int = WINDOW_SIZE, var data: List<EndlessItem> = ArrayList(capacity)) {
-        val end: Int
+        public val end: Int
             get() = start + capacity - 1
 
         private val endOfData: Int
@@ -59,16 +62,20 @@ class WindowEndlessDataSource(private val activity: Activity,
             return data[internalIndex]
         }
 
-        fun advanceToNewPosition(newPosition: Int): Window {
+        private fun calculateStartBoundary(position: Int, capacity: Int): Int{
+            return (position / capacity) * capacity
+        }
+
+        public fun advanceToNewPosition(newPosition: Int): Window {
             if (start <= newPosition && newPosition <= end) {
                 return Window(start, capacity, data)
             }
             val retVal: Window
             if (newPosition < start) {
-                retVal = Window(Math.max(0, start - SMALL_WINDOW_SIZE), SMALL_WINDOW_SIZE)
+                retVal = Window(Math.max(0, calculateStartBoundary(newPosition, SMALL_WINDOW_SIZE)), SMALL_WINDOW_SIZE)
             } else {
                 //newPosition >end
-                retVal = Window(end + 1, SMALL_WINDOW_SIZE)
+                retVal = Window(calculateStartBoundary(newPosition, SMALL_WINDOW_SIZE), SMALL_WINDOW_SIZE)
             }
             Log.d("EndlessLoader", "New position: $newPosition: window moved to $retVal")
             return retVal
@@ -78,7 +85,7 @@ class WindowEndlessDataSource(private val activity: Activity,
             return this.start <= position && position < this.start + this.capacity
         }
 
-        fun merge(otherWindow: Window) {
+        public fun merge(otherWindow: Window) {
             Log.d("EndlessLoader", "Merging $this and $otherWindow")
 
             var newStart: Int
@@ -107,24 +114,24 @@ class WindowEndlessDataSource(private val activity: Activity,
             Log.d("EndlessLoader", "Merged: $this")
         }
 
-        fun reset() {
-            data = ArrayList()
+        public fun reset() {
+            data = ArrayList(WINDOW_SIZE)
         }
 
-        fun asBundle(): Bundle {
+        public fun asBundle(): Bundle {
             val b = Bundle()
             b.putInt("start", start)
             b.putInt("capacity", capacity)
             return b
         }
 
-        override fun toString(): String {
+        public override fun toString(): String {
             return "[start: $start, end: $end, capacity: $capacity, size: $size]"
         }
     }
 
     public inner class RestartLoaderRunnable(var newWindow: Window): Runnable{
-        override fun run() {
+        public override fun run() {
             Log.d("EndlessLoader", "Restarting loader for window $newWindow, $this")
             activity.loaderManager.restartLoader(loaderId, newWindow.asBundle(), this@WindowEndlessDataSource)
         }
@@ -134,13 +141,10 @@ class WindowEndlessDataSource(private val activity: Activity,
 
     override fun getItem(position: Int): EndlessItem {
         val dataByIndex = window.getDataByIndex(position)
-        if (!this.window.hasPosition(position) || dataByIndex.type == EndlessItem.Type.STUB) {
+        if (!window.hasPosition(position) || dataByIndex.type == EndlessItem.Type.STUB) {
             val newWindow = window.advanceToNewPosition(position)
-
-            //TODO there is a bug here: for some reason restartLoaderRunnable is renewed every so often, which causes
-            //it to refresh multiple times on fast scrolling. I need to further investigate this
             restartLoaderRunnable.newWindow = newWindow
-            Log.d("EndlessLoader", "removing callback $restartLoaderRunnable")
+            Log.d("EndlessLoader", "removing callback $restartLoaderRunnable from $this")
             handler.removeCallbacks(restartLoaderRunnable)
             Log.d("EndlessLoader", "postDelayed $restartLoaderRunnable")
             handler.postDelayed(restartLoaderRunnable, 500)
@@ -181,7 +185,7 @@ class WindowEndlessDataSource(private val activity: Activity,
     }
 
     override fun dropCache() {
-        window.data = ArrayList(WINDOW_SIZE)
+        window.reset()
         notifyListeners()
     }
 
