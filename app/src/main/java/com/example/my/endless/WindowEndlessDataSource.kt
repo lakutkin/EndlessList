@@ -10,6 +10,7 @@ import android.telecom.Call
 import android.util.Log
 import android.widget.BaseAdapter
 import android.widget.ListAdapter
+import java.security.Timestamp
 import java.util.*
 
 class WindowEndlessDataSource(private val activity: Activity,
@@ -24,10 +25,11 @@ class WindowEndlessDataSource(private val activity: Activity,
     }
 
     companion object {
-        public val WINDOW_SIZE = 40
-        public val SMALL_WINDOW_SIZE = 20
+        //TODO pass as a parameter
+        public val VIEWPORT_SIZE = 12
+        public val WINDOW_SIZE = 100
+        public val MARGIN = VIEWPORT_SIZE / 2
     }
-
 
     private var handler = Handler(Looper.getMainLooper())
 
@@ -42,7 +44,7 @@ class WindowEndlessDataSource(private val activity: Activity,
     }
 
     public class Window(internal var start: Int = 0, internal var capacity: Int = WINDOW_SIZE, var data: List<EndlessItem> = ArrayList(capacity)) {
-        public val end: Int
+       public val end: Int
             get() = start + capacity - 1
 
         private val endOfData: Int
@@ -62,29 +64,17 @@ class WindowEndlessDataSource(private val activity: Activity,
             return data[internalIndex]
         }
 
-        private fun calculateStartBoundary(position: Int, capacity: Int): Int{
-            return (position / capacity) * capacity
-        }
-
-        public fun advanceToNewPosition(newPosition: Int): Window {
-            if (start <= newPosition && newPosition <= end) {
-                return Window(start, capacity, data)
-            }
-            val retVal: Window
-            if (newPosition < start) {
-                retVal = Window(Math.max(0, calculateStartBoundary(newPosition, SMALL_WINDOW_SIZE)), SMALL_WINDOW_SIZE)
-            } else {
-                //newPosition >end
-                retVal = Window(calculateStartBoundary(newPosition, SMALL_WINDOW_SIZE), SMALL_WINDOW_SIZE)
-            }
-            Log.d("EndlessLoader", "New position: $newPosition: window moved to $retVal")
-            return retVal
-        }
+        public fun closeToEdge(newPosition: Int) = start + MARGIN > newPosition || newPosition > end - MARGIN
+        private fun insideEdges(newPosition: Int) = !closeToEdge(newPosition)
 
         internal fun hasPosition(position: Int): Boolean {
             return this.start <= position && position < this.start + this.capacity
         }
 
+        //TODO функция мержа бажная для, например, случая
+        //Merging [start: 0, end: 99, capacity: 100, size: 100] and [start: 246, end: 301, capacity: 56, size: 56]
+        //Merged: [start: 202, end: 301, capacity: 100, size: 100]
+        //должно было получиться merged: [start: 246, end: 301, capacity: 56, size: 56], т.к. эти множества не пересекаются
         public fun merge(otherWindow: Window) {
             Log.d("EndlessLoader", "Merging $this and $otherWindow")
 
@@ -130,28 +120,60 @@ class WindowEndlessDataSource(private val activity: Activity,
         }
     }
 
-    public inner class RestartLoaderRunnable(var newWindow: Window): Runnable{
+    public fun List<ViewPortRecord>.middle(): ViewPortRecord {
+        return this[this.size / 2]
+    }
+
+    public inner class RestartLoaderRunnable(): Runnable{
         public override fun run() {
+            val sorted = viewPort.sortedBy { it.timestamp }.takeLast(VIEWPORT_SIZE)
+            viewPort.clear()
+            val stub = sorted.any{ !window.hasPosition(it.value) || window.getDataByIndex(it.value).type == EndlessItem.Type.STUB }
+            val closeToTop = sorted.any { window.start <= it.value && it.value <= window.start + MARGIN }
+            val closeToBottom = sorted.any {window.end >= it.value && it.value >= window.end - MARGIN}
+
+            if (!closeToTop && !closeToBottom && !stub){
+                return
+            }
+
+            val newWindow: Window
+
+            if (closeToTop){
+                Log.d("EndlessLoader", "closeToTop")
+                if (window.start == 0){
+                    return
+                }
+                newWindow = Window(Math.max(0, sorted.last().value - WINDOW_SIZE + 3 * VIEWPORT_SIZE), WINDOW_SIZE - 3 * VIEWPORT_SIZE)
+            } else if (closeToBottom) {
+                Log.d("EndlessLoader", "closeToBottom")
+                newWindow = Window(sorted.last().value, WINDOW_SIZE - 3 * VIEWPORT_SIZE)
+            } else {//stub
+                Log.d("EndlessLoader", "stubs")
+                newWindow = Window(Math.max(0, sorted.middle().value - WINDOW_SIZE / 2), WINDOW_SIZE)
+            }
+
             Log.d("EndlessLoader", "Restarting loader for window $newWindow, $this")
             activity.loaderManager.restartLoader(loaderId, newWindow.asBundle(), this@WindowEndlessDataSource)
         }
     }
 
-    val restartLoaderRunnable = RestartLoaderRunnable(window)
+    val restartLoaderRunnable = RestartLoaderRunnable()
+
+    data class ViewPortRecord(val timestamp: Long, val value: Int)
+
+    val viewPort = ArrayList<ViewPortRecord>()
 
     override fun getItem(position: Int): EndlessItem {
-        val dataByIndex = window.getDataByIndex(position)
-        if (!window.hasPosition(position) || dataByIndex.type == EndlessItem.Type.STUB) {
-            val newWindow = window.advanceToNewPosition(position)
-            restartLoaderRunnable.newWindow = newWindow
-            Log.d("EndlessLoader", "removing callback $restartLoaderRunnable from $this")
-            handler.removeCallbacks(restartLoaderRunnable)
-            Log.d("EndlessLoader", "postDelayed $restartLoaderRunnable")
-            handler.postDelayed(restartLoaderRunnable, 500)
+        val viewPortRecord = ViewPortRecord(System.currentTimeMillis(), position)
+        viewPort.add(viewPortRecord)
+        Log.d("EndlessLoader", "tracking position $viewPortRecord")
+        handler.removeCallbacks(restartLoaderRunnable)
+        handler.postDelayed(restartLoaderRunnable, 500)
+        if (!window.hasPosition(position)){
             return EndlessItem(EndlessItem.Type.STUB, null)
+        } else {
+            return window.getDataByIndex(position)
         }
-
-        return dataByIndex
     }
 
     override fun getItemId(position: Int): Long {
