@@ -1,9 +1,9 @@
-package com.example.my.endless
+package com.example.endlesslist.endless
 
 import android.content.Context
 import android.util.Log
 
-import com.example.my.SaneAsyncLoader
+import com.example.endlesslist.SaneAsyncLoader
 
 abstract class EndlessLoader(ctx: Context, var start: Int, var capacity: Int) : SaneAsyncLoader<WindowEndlessDataSource.Window>(ctx) {
 

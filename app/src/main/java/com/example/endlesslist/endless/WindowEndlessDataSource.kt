@@ -1,4 +1,4 @@
-package com.example.my.endless
+package com.example.endlesslist.endless
 
 import android.app.Activity
 import android.app.LoaderManager
@@ -43,7 +43,7 @@ class WindowEndlessDataSource(private val activity: Activity,
         fun needData(start: Int, length: Int): List<Any>
     }
 
-    public class Window(internal var start: Int = 0, internal var capacity: Int = WINDOW_SIZE, var data: List<EndlessItem> = ArrayList(capacity)) {
+    class Window(internal var start: Int = 0, internal var capacity: Int = WINDOW_SIZE, var data: List<EndlessItem> = ArrayList(capacity)) {
        public val end: Int
             get() = start + capacity - 1
 

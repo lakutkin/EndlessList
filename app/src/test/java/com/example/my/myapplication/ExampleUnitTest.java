@@ -1,4 +1,4 @@
-package com.example.my.myapplication;
+package com.example.endlesslist.myapplication;
 
 import org.junit.Test;
 

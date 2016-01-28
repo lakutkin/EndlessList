@@ -1,4 +1,4 @@
-package com.example.my.endless
+package com.example.endlesslist.endless
 
 interface EndlessDataSource {
     val totalCount: Int

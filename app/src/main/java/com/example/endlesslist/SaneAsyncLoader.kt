@@ -1,4 +1,4 @@
-package com.example.my
+package com.example.endlesslist
 
 import android.content.AsyncTaskLoader
 import android.content.Context

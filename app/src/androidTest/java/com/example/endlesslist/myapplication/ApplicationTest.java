@@ -1,4 +1,4 @@
-package com.example.my.myapplication;
+package com.example.endlesslist.myapplication;
 
 import android.app.Application;
 import android.test.ApplicationTestCase;

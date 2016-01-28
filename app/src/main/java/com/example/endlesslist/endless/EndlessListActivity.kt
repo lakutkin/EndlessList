@@ -1,4 +1,4 @@
-package com.example.my.endless
+package com.example.endlesslist.endless
 
 import android.app.Activity
 import android.app.LoaderManager
@@ -11,12 +11,12 @@ import android.view.ViewGroup
 import android.widget.ListView
 import android.widget.TextView
 
-import com.example.my.myapplication.R
+import com.example.endlesslist.myapplication.R
 import java.util.*
 import kotlin.jvm.internal.iterator
 
 class EndlessListActivity : Activity() {
-    private var adapter: EndlessAdapter? = null
+    private lateinit var adapter: EndlessAdapter
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -47,7 +47,7 @@ class EndlessListActivity : Activity() {
         listView.adapter = adapter
 
         findViewById(R.id.button).setOnClickListener {
-            (adapter as EndlessAdapter).dropCache()
+            adapter.dropCache()
         }
     }
 

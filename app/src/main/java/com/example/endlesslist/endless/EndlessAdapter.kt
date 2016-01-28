@@ -1,4 +1,4 @@
-package com.example.my.endless
+package com.example.endlesslist.endless
 
 import android.widget.BaseAdapter
 
