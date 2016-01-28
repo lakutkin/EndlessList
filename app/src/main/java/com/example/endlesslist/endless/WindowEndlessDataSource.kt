@@ -2,6 +2,7 @@ package com.example.endlesslist.endless
 
 import android.app.Activity
 import android.app.LoaderManager
+import android.content.Context
 import android.content.Loader
 import android.os.Bundle
 import android.os.Handler
@@ -10,19 +11,13 @@ import android.telecom.Call
 import android.util.Log
 import android.widget.BaseAdapter
 import android.widget.ListAdapter
+import com.example.endlesslist.SaneAsyncLoader
 import java.security.Timestamp
 import java.util.*
 
 class WindowEndlessDataSource(private val activity: Activity,
                               private val loaderId: Int,
-                              private val callback: WindowEndlessDataSource.Callback) : EndlessDataSource, LoaderManager.LoaderCallbacks<WindowEndlessDataSource.Window> {
-    override var totalCount = 1
-    private var window: Window
-
-    init{
-        window = Window()
-        activity.loaderManager.initLoader(loaderId, window.asBundle(), this@WindowEndlessDataSource)
-    }
+                              private val callback: WindowEndlessDataSource.Callback) : EndlessDataSource, LoaderManager.LoaderCallbacks<Window> {
 
     companion object {
         //TODO pass as a parameter
@@ -31,98 +26,11 @@ class WindowEndlessDataSource(private val activity: Activity,
         public val MARGIN = VIEWPORT_SIZE / 2
     }
 
-    private var handler = Handler(Looper.getMainLooper())
-
-    private var listener: (() -> Unit)? = null
-
-    override fun setListener(function: () -> Unit) {
-        this.listener = function
-    }
-
     public interface Callback {
         fun needData(start: Int, length: Int): List<Any>
     }
 
-    class Window(internal var start: Int = 0, internal var capacity: Int = WINDOW_SIZE, var data: List<EndlessItem> = ArrayList(capacity)) {
-       public val end: Int
-            get() = start + capacity - 1
 
-        private val endOfData: Int
-            get() = start + size - 1
-
-
-        public val size: Int
-            get() = data.size
-
-        public fun getDataByIndex(externalIndex: Int): EndlessItem {
-            //external index can be any value, maybe large
-            //internal index is used to access data in the data array
-            val internalIndex = externalIndex - start
-            if (internalIndex >= size || internalIndex < 0) {
-                return EndlessItem(EndlessItem.Type.STUB)
-            }
-            return data[internalIndex]
-        }
-
-        public fun closeToEdge(newPosition: Int) = start + MARGIN > newPosition || newPosition > end - MARGIN
-        private fun insideEdges(newPosition: Int) = !closeToEdge(newPosition)
-
-        internal fun hasPosition(position: Int): Boolean {
-            return this.start <= position && position < this.start + this.capacity
-        }
-
-        //TODO функция мержа бажная для, например, случая
-        //Merging [start: 0, end: 99, capacity: 100, size: 100] and [start: 246, end: 301, capacity: 56, size: 56]
-        //Merged: [start: 202, end: 301, capacity: 100, size: 100]
-        //должно было получиться merged: [start: 246, end: 301, capacity: 56, size: 56], т.к. эти множества не пересекаются
-        public fun merge(otherWindow: Window) {
-            Log.d("EndlessLoader", "Merging $this and $otherWindow")
-
-            var newStart: Int
-            var newEnd: Int
-
-            if (start <= otherWindow.start) {
-                //new window is to the right
-                newEnd = Math.max(end, otherWindow.endOfData)
-                newStart = (newEnd + 1) - capacity
-            } else {
-                //new window is to the left
-                newStart = Math.min(start, otherWindow.start)
-            }
-            var newData = Array(capacity, fun (i: Int): EndlessItem{
-                val index = i + newStart
-                if (otherWindow.hasPosition(index)){
-                    return otherWindow.getDataByIndex(index)
-                } else if (hasPosition(index)){
-                    return getDataByIndex(index)
-                } else {
-                    return  EndlessItem(EndlessItem.Type.STUB)
-                }
-            })
-            data = newData.asList()
-            start = newStart
-            Log.d("EndlessLoader", "Merged: $this")
-        }
-
-        public fun reset() {
-            data = ArrayList(WINDOW_SIZE)
-        }
-
-        public fun asBundle(): Bundle {
-            val b = Bundle()
-            b.putInt("start", start)
-            b.putInt("capacity", capacity)
-            return b
-        }
-
-        public override fun toString(): String {
-            return "[start: $start, end: $end, capacity: $capacity, size: $size]"
-        }
-    }
-
-    public fun List<ViewPortRecord>.middle(): ViewPortRecord {
-        return this[this.size / 2]
-    }
 
     public inner class RestartLoaderRunnable(): Runnable{
         public override fun run() {
@@ -157,11 +65,33 @@ class WindowEndlessDataSource(private val activity: Activity,
         }
     }
 
-    val restartLoaderRunnable = RestartLoaderRunnable()
-
     data class ViewPortRecord(val timestamp: Long, val value: Int)
 
     val viewPort = ArrayList<ViewPortRecord>()
+    val restartLoaderRunnable = RestartLoaderRunnable()
+    override var totalCount = 1
+    private var window: Window
+
+    init{
+        window = Window()
+        activity.loaderManager.initLoader(loaderId, window.asBundle(), this@WindowEndlessDataSource)
+    }
+
+    private var handler = Handler(Looper.getMainLooper())
+
+    private var listener: (() -> Unit)? = null
+
+    override fun setListener(function: () -> Unit) {
+        this.listener = function
+    }
+
+
+
+    public fun List<ViewPortRecord>.middle(): ViewPortRecord {
+        return this[this.size / 2]
+    }
+
+
 
     override fun getItem(position: Int): EndlessItem {
         val viewPortRecord = ViewPortRecord(System.currentTimeMillis(), position)
@@ -180,12 +110,18 @@ class WindowEndlessDataSource(private val activity: Activity,
         return 0
     }
 
+    //just a subclass for AsyncLoader with start and capacity properties
+    abstract class EndlessLoader(ctx: Context, var start: Int, var capacity: Int) : SaneAsyncLoader<Window>(ctx) {
+    }
+
     override fun onCreateLoader(id: Int, args: Bundle?): Loader<Window> {
         return object : EndlessLoader(activity, args!!.getInt("start"), args.getInt("capacity")) {
-            override fun advanceInBackground(start: Int, length: Int): List<EndlessItem> {
-                val data = callback.needData(start, length)
-                val windowedData = data.map { EndlessItem(EndlessItem.Type.REAL, it) }
-                return windowedData
+            override fun loadInBackground(): Window {
+                Log.d("EndlessLoader", "Loading ${capacity} items from ${start}")
+                val window = Window(start, capacity)
+                window.data = callback.needData(window.start, window.capacity).map { EndlessItem(EndlessItem.Type.REAL, it) }
+                Log.d("EndlessLoader", "data: ${window.data}")
+                return window
             }
         }
     }
